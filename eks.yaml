@@ -86,7 +86,8 @@ jobs:
         IMAGE_TAG: ${{ env.SERVICE_NAME }}-${{ github.sha }}
       run: |
         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-          echo "Creating new deployment and service"
+          echo "Creating new Namespace , deployment and service"
+          kubectl create ns ${{ env.K8S_NAMESPACE }}
           kubectl create deployment ${{ env.SERVICE_NAME }} --image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ env.K8S_NAMESPACE }}
           kubectl expose deployment ${{ env.SERVICE_NAME }} --port=${{ env.APP_PORT }} --type=ClusterIP -n ${{ env.K8S_NAMESPACE }}
         else
@@ -97,4 +98,3 @@ jobs:
     - name: Verify deployment
       run: |
         kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ env.K8S_NAMESPACE }}
-        kubectl get services -o wide -n ${{ env.K8S_NAMESPACE }}
