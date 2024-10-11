@@ -94,6 +94,7 @@ runs:
             version: 'latest'
 
         - name: Update kube config
+          shell: bash  
           run: aws eks update-kubeconfig --name ${{ inputs.eks_cluster_name }} --region ${{ inputs.aws_region }}
 
         - name: Check if deployment exists
