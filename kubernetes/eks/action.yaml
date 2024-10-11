@@ -1,5 +1,8 @@
 name: Deploy to Amazon EKS
-
+description: "Deploy to Amazon EKS"
+author: "Praveen Sansaniwal"
+runs:
+  using: "composite"
 on:
   workflow_call:
     inputs:
