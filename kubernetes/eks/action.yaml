@@ -63,6 +63,7 @@ runs:
 
         - name: Determine Dockerfile path
           id: dockerfile-path
+          shell: bash  
           run: |
             if [ -f "${{ inputs.dockerfile_path }}" ]; then
               echo "DOCKERFILE=${{ inputs.dockerfile_path }}" >> $GITHUB_OUTPUT
@@ -77,6 +78,7 @@ runs:
 
         - name: Build, tag, and push image to Amazon ECR
           id: build-image
+          shell: bash  
           env:
             ECR_REGISTRY: ${{ inputs.docker_registry }}
             ECR_REPOSITORY: ${{ inputs.ecr_repository }}
@@ -96,6 +98,7 @@ runs:
 
         - name: Check if deployment exists
           id: check-deployment
+          shell: bash  
           run: |
             if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
               echo "exists=true" >> $GITHUB_OUTPUT
@@ -108,6 +111,7 @@ runs:
             ECR_REGISTRY: ${{ inputs.docker_registry }}
             ECR_REPOSITORY: ${{ inputs.ecr_repository }}
             IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+          shell: bash  
           run: |
             if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
               echo "Creating new Namespace, deployment, and service"
@@ -118,7 +122,8 @@ runs:
               echo "Updating existing deployment"
               kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
             fi
-
-    - name: Verify deployment
-      run: |
-        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+            
+        - name: Verify deployment
+          shell: bash  
+          run: |
+            kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
