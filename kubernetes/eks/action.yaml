@@ -54,73 +54,73 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-access-key-id: ${{ inputs.aws_access_key_id }}
-        aws-secret-access-key: ${{ inputs.aws_secret_access_key }}
-        aws-region: ${{ inputs.aws_region }}
+    # - name: Configure AWS credentials
+    #   uses: aws-actions/configure-aws-credentials@v1
+    #   with:
+    #     aws-access-key-id: ${{ inputs.aws_access_key_id }}
+    #     aws-secret-access-key: ${{ inputs.aws_secret_access_key }}
+    #     aws-region: ${{ inputs.aws_region }}
 
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+    # - name: Login to Amazon ECR
+    #   id: login-ecr
+    #   uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Determine Dockerfile path
-      id: dockerfile-path
-      run: |
-        if [ -f "${{ inputs.dockerfile_path }}" ]; then
-          echo "DOCKERFILE=${{ inputs.dockerfile_path }}" >> $GITHUB_OUTPUT
-        elif [ -f "dockerfile" ]; then
-          echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT
-        elif [ -f "Dockerfile" ]; then
-          echo "DOCKERFILE=Dockerfile" >> $GITHUB_OUTPUT
-        else
-          echo "No Dockerfile found"
-          exit 1
-        fi
+    # - name: Determine Dockerfile path
+    #   id: dockerfile-path
+    #   run: |
+    #     if [ -f "${{ inputs.dockerfile_path }}" ]; then
+    #       echo "DOCKERFILE=${{ inputs.dockerfile_path }}" >> $GITHUB_OUTPUT
+    #     elif [ -f "dockerfile" ]; then
+    #       echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT
+    #     elif [ -f "Dockerfile" ]; then
+    #       echo "DOCKERFILE=Dockerfile" >> $GITHUB_OUTPUT
+    #     else
+    #       echo "No Dockerfile found"
+    #       exit 1
+    #     fi
 
-    - name: Build, tag, and push image to Amazon ECR
-      id: build-image
-      env:
-        ECR_REGISTRY: ${{ inputs.docker_registry }}
-        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+    # - name: Build, tag, and push image to Amazon ECR
+    #   id: build-image
+    #   env:
+    #     ECR_REGISTRY: ${{ inputs.docker_registry }}
+    #     IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+    #   run: |
+    #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
+    #     docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+    #     echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-    - name: Install kubectl
-      uses: azure/setup-kubectl@v2.0
-      with:
-        version: 'latest'
+    # - name: Install kubectl
+    #   uses: azure/setup-kubectl@v2.0
+    #   with:
+    #     version: 'latest'
 
-    - name: Update kube config
-      run: aws eks update-kubeconfig --name ${{ inputs.eks_cluster_name }} --region ${{ inputs.aws_region }}
+    # - name: Update kube config
+    #   run: aws eks update-kubeconfig --name ${{ inputs.eks_cluster_name }} --region ${{ inputs.aws_region }}
 
-    - name: Check if deployment exists
-      id: check-deployment
-      run: |
-        if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
-          echo "exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "exists=false" >> $GITHUB_OUTPUT
-        fi
+    # - name: Check if deployment exists
+    #   id: check-deployment
+    #   run: |
+    #     if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
+    #       echo "exists=true" >> $GITHUB_OUTPUT
+    #     else
+    #       echo "exists=false" >> $GITHUB_OUTPUT
+    #     fi
 
-    - name: Create or update deployment
-      env:
-        ECR_REGISTRY: ${{ inputs.docker_registry }}
-        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
-      run: |
-        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-          echo "Creating new Namespace , deployment and service"
-          kubectl create ns ${{ inputs.k8s_namespace }}
-          kubectl create deployment ${{ inputs.service_name }} --image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-          kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} --type=ClusterIP -n ${{ inputs.k8s_namespace }}
-        else
-          echo "Updating existing deployment"
-          kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-        fi
+    # - name: Create or update deployment
+    #   env:
+    #     ECR_REGISTRY: ${{ inputs.docker_registry }}
+    #     IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+    #   run: |
+    #     if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
+    #       echo "Creating new Namespace , deployment and service"
+    #       kubectl create ns ${{ inputs.k8s_namespace }}
+    #       kubectl create deployment ${{ inputs.service_name }} --image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
+    #       kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} --type=ClusterIP -n ${{ inputs.k8s_namespace }}
+    #     else
+    #       echo "Updating existing deployment"
+    #       kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
+    #     fi
 
-    - name: Verify deployment
-      run: |
-        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+    # - name: Verify deployment
+    #   run: |
+    #     kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
