@@ -1,11 +1,7 @@
 name: Deploy to Amazon EKS
 description: "Deploy to Amazon EKS"
 author: "Praveen Sansaniwal"
-runs:
-  using: "composite"
-  on:
-    workflow_call:
-      inputs:
+inputs:
         deploy_branch:
           description: 'Branch to deploy from'
           required: true
@@ -48,8 +44,9 @@ runs:
           description: 'AWS ECR Registery Like ACCOUNTID.dkr.ecr.REGION.amazonaws.com'
           required: true
   
-  
-  jobs:
+runs:
+  using: "composite"
+  steps:  
     deploy:
       name: Build and Deploy
       runs-on: ubuntu-latest
