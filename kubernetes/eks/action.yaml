@@ -116,7 +116,11 @@ runs:
           run: |
             if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
               echo "Creating new Namespace, deployment, and service"
-              kubectl create ns ${{ inputs.k8s_namespace }} || echo "Namespace already exists"
+              if ! kubectl get ns ${{ inputs.k8s_namespace }} >/dev/null 2>&1; then
+                kubectl create ns ${{ inputs.k8s_namespace }}
+              else
+                echo "Namespace ${{ inputs.k8s_namespace }} already exists"
+              fi
               kubectl create deployment ${{ inputs.service_name }} --image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
               kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} --type=ClusterIP -n ${{ inputs.k8s_namespace }}
             else
