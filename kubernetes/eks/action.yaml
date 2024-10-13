@@ -125,7 +125,7 @@ runs:
               kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} --type=ClusterIP -n ${{ inputs.k8s_namespace }}
             else
               echo "Updating existing deployment"
-              kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
+              kubectl set image deployment/${{ inputs.service_name }} $ECR_REPOSITORY=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
             fi
             
         - name: Verify deployment
