@@ -1,4 +1,4 @@
-name: Deploy to Amazon EKS
+name: Deploy ECS & Deploy to ECS 
 description: "Deploy to Amazon EKS"
 author: "Praveen Sansaniwal"
 inputs:
@@ -18,8 +18,8 @@ inputs:
     description: 'Service name'
     required: true
     default: 'MyService'
-  eks_cluster_name:
-    description: 'EKS cluster name'
+  ecs_cluster_name:
+    description: 'ECS cluster name'
     required: true
     default: 'my-cluster'
   dockerfile_path:
@@ -30,10 +30,10 @@ inputs:
     description: 'Application port'
     required: true
     default: '80'
-  k8s_namespace:
-    description: 'Kubernetes namespace'
+  task_defination:
+    description: 'Task Defination Name'
     required: true
-    default: 'default'
+    default: 'mycluster'
   aws_access_key_id:
     description: 'AWS_ACCESS_KEY_ID'
     required: true
