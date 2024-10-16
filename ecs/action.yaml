@@ -46,6 +46,16 @@ inputs:
   execution_role_arn:
     description: 'arn:aws:iam::123456789012:role/ecsTaskExecutionRole'
     required: true
+  cpu:
+    description: 'AWS ECR Registry Like ACCOUNTID.dkr.ecr.REGION.amazonaws.com'
+    required: true
+    default: '1024'
+  ram:
+    description: 'arn:aws:iam::123456789012:role/ecsTaskExecutionRole'
+    required: true
+    default: '2048'
+
+
 runs:
   using: "composite"
   steps:
@@ -191,6 +201,8 @@ runs:
         EXECUTION_ROLE_ARN: ${{ inputs.execution_role_arn }}  # Execution role ARN is needed
         SERVICE_NAME: ${{ inputs.service_name }}
         APP_PORT: ${{ inputs.app_port }}
+        CPU: ${{ inputs.cpu }}
+        RAM: ${{ inputs.ram }}
       run: |
         if [ -z "$EXECUTION_ROLE_ARN" ]; then
           echo "Error: EXECUTION_ROLE_ARN is not provided."
@@ -219,8 +231,8 @@ runs:
             --network-mode awsvpc \
             --requires-compatibilities FARGATE \
             --execution-role-arn "$EXECUTION_ROLE_ARN" \
-            --cpu 1024 \
-            --memory 2048 \
+            --cpu $CPU \
+            --memory $RAM \
             --container-definitions "[{\"name\":\"$SERVICE_NAME\",\"image\":\"$IMAGE\",\"portMappings\":[{\"containerPort\":$APP_PORT,\"hostPort\":$APP_PORT}],\"essential\":true}]" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
