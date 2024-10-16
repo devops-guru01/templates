@@ -119,13 +119,17 @@ runs:
         else
           echo "ECS cluster ${{ inputs.ecs_cluster_name }} already exists"
         fi
-
+    
     - name: Setup networking
       id: setup-networking
       env:
         APP_PORT: ${{ inputs.app_port }}
       shell: bash
       run: |
+        set -x  # Enable verbose mode to print each command
+        
+        echo "Starting networking setup..."
+        
         # Get default VPC ID
         VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)
         echo "Using default VPC: $VPC_ID"
@@ -136,9 +140,12 @@ runs:
         
         # Security Group name
         SG_NAME="${{ inputs.service_name }}-sg"
+        echo "Security group name: $SG_NAME"
         
         # Check if the security group already exists
+        echo "Checking for existing security group..."
         EXISTING_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" "Name=vpc-id,Values=$VPC_ID" --query "SecurityGroups[0].GroupId" --output text)
+        echo "Existing security group ID: $EXISTING_SG_ID"
         
         if [ "$EXISTING_SG_ID" != "None" ]; then
             # Security group already exists
@@ -146,6 +153,7 @@ runs:
             echo "Security group $SG_NAME already exists: $SG_ID"
         else
             # Create new security group
+            echo "Creating new security group..."
             SG_ID=$(aws ec2 create-security-group --group-name $SG_NAME --description "Security group for ${{ inputs.service_name }}" --vpc-id $VPC_ID --query "GroupId" --output text)
             echo "Created new security group: $SG_ID"
         fi
@@ -153,18 +161,23 @@ runs:
         # Function to check if a rule exists
         function check_rule_exists() {
             PORT=$1
+            echo "Checking if rule exists for port $PORT..."
             EXISTS=$(aws ec2 describe-security-groups --group-ids $SG_ID --query "SecurityGroups[0].IpPermissions[?FromPort==\`$PORT\` && ToPort==\`$PORT\` && IpProtocol=='tcp' && IpRanges[?CidrIp=='0.0.0.0/0']]" --output text)
             if [ -z "$EXISTS" ]; then
+                echo "Rule for port $PORT does not exist"
                 return 1  # Rule does not exist
             else
+                echo "Rule for port $PORT exists"
                 return 0  # Rule exists
             fi
         }
         
         # Check and add rule for the custom application port
         APP_PORT=${{ inputs.app_port }}
+        echo "Checking application port rule: $APP_PORT"
         check_rule_exists $APP_PORT
         if [ $? -eq 1 ]; then
+            echo "Adding inbound rule for application port: $APP_PORT"
             aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port $APP_PORT --cidr 0.0.0.0/0
             echo "Added inbound rule for application port: $APP_PORT"
         else
@@ -172,8 +185,10 @@ runs:
         fi
         
         # Check and add rule for port 80 (HTTP)
+        echo "Checking HTTP port rule"
         check_rule_exists 80
         if [ $? -eq 1 ]; then
+            echo "Adding inbound rule for port 80 (HTTP)"
             aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
             echo "Added inbound rule for port 80 (HTTP)"
         else
@@ -181,8 +196,10 @@ runs:
         fi
         
         # Check and add rule for port 443 (HTTPS)
+        echo "Checking HTTPS port rule"
         check_rule_exists 443
         if [ $? -eq 1 ]; then
+            echo "Adding inbound rule for port 443 (HTTPS)"
             aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
             echo "Added inbound rule for port 443 (HTTPS)"
         else
@@ -190,10 +207,12 @@ runs:
         fi
         
         # Output values
+        echo "Outputting values..."
         echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
         echo "subnet_ids=$SUBNET_IDS" >> $GITHUB_OUTPUT
         echo "security_group_id=$SG_ID" >> $GITHUB_OUTPUT
-
+        
+        echo "Networking setup completed."
     
     - name: Check and update/create task definition
       shell: bash
