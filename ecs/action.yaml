@@ -264,6 +264,10 @@ runs:
             --service $SERVICE_NAME \
             --task-definition $TASK_DEFINITION_ARN \
             --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME
+
         else
           echo "Creating new service $SERVICE_NAME with ALB"
           
