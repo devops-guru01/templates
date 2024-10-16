@@ -119,13 +119,14 @@ runs:
         else
           echo "ECS cluster ${{ inputs.ecs_cluster_name }} already exists"
         fi
-    
+        
     - name: Setup networking
       id: setup-networking
       env:
         APP_PORT: ${{ inputs.app_port }}
       shell: bash
       run: |
+        set -e  # Exit immediately if a command exits with a non-zero status
         set -x  # Enable verbose mode to print each command
         
         echo "Starting networking setup..."
@@ -172,36 +173,35 @@ runs:
             fi
         }
         
+        # Function to add a rule
+        function add_rule() {
+            PORT=$1
+            echo "Adding inbound rule for port: $PORT"
+            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port $PORT --cidr 0.0.0.0/0
+            echo "Added inbound rule for port: $PORT"
+        }
+        
         # Check and add rule for the custom application port
         APP_PORT=${{ inputs.app_port }}
         echo "Checking application port rule: $APP_PORT"
-        check_rule_exists $APP_PORT
-        if [ $? -eq 1 ]; then
-            echo "Adding inbound rule for application port: $APP_PORT"
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port $APP_PORT --cidr 0.0.0.0/0
-            echo "Added inbound rule for application port: $APP_PORT"
+        if ! check_rule_exists $APP_PORT; then
+            add_rule $APP_PORT
         else
             echo "Inbound rule for application port $APP_PORT already exists, skipping."
         fi
         
         # Check and add rule for port 80 (HTTP)
         echo "Checking HTTP port rule"
-        check_rule_exists 80
-        if [ $? -eq 1 ]; then
-            echo "Adding inbound rule for port 80 (HTTP)"
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
-            echo "Added inbound rule for port 80 (HTTP)"
+        if ! check_rule_exists 80; then
+            add_rule 80
         else
             echo "Inbound rule for port 80 (HTTP) already exists, skipping."
         fi
         
         # Check and add rule for port 443 (HTTPS)
         echo "Checking HTTPS port rule"
-        check_rule_exists 443
-        if [ $? -eq 1 ]; then
-            echo "Adding inbound rule for port 443 (HTTPS)"
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
-            echo "Added inbound rule for port 443 (HTTPS)"
+        if ! check_rule_exists 443; then
+            add_rule 443
         else
             echo "Inbound rule for port 443 (HTTPS) already exists, skipping."
         fi
