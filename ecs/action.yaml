@@ -219,8 +219,8 @@ runs:
             --network-mode awsvpc \
             --requires-compatibilities FARGATE \
             --execution-role-arn "$EXECUTION_ROLE_ARN" \
-            --cpu 256 \
-            --memory 512 \
+            --cpu 1024 \
+            --memory 2048 \
             --container-definitions "[{\"name\":\"$SERVICE_NAME\",\"image\":\"$IMAGE\",\"portMappings\":[{\"containerPort\":$APP_PORT,\"hostPort\":$APP_PORT}],\"essential\":true}]" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
