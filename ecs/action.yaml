@@ -122,6 +122,8 @@ runs:
 
     - name: Setup networking
       id: setup-networking
+      env:
+        APP_PORT: ${{ inputs.app_port }}
       shell: bash
       run: |
         # Get default VPC ID
