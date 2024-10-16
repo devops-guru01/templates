@@ -180,31 +180,47 @@ runs:
         echo "subnet_ids=$SUBNET_IDS" >> $GITHUB_OUTPUT
         echo "security_group_id=$SG_ID" >> $GITHUB_OUTPUT
 
-
+    
     - name: Check and update/create task definition
       shell: bash
       env:
         TASK_DEFINITION: ${{ inputs.task_definition }}
         IMAGE: ${{ steps.build-image.outputs.image }}
+        EXECUTION_ROLE_ARN: ${{ inputs.execution_role_arn }}  # Pass the execution role ARN as input
+        SERVICE_NAME: ${{ inputs.service_name }}
+        APP_PORT: ${{ inputs.app_port }}
       run: |
         if aws ecs describe-task-definition --task-definition $TASK_DEFINITION >/dev/null 2>&1; then
           echo "Updating existing task definition $TASK_DEFINITION"
+          
+          # Fetch current task definition and update with the new image
           TASK_DEF=$(aws ecs describe-task-definition --task-definition $TASK_DEFINITION)
-          NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE" '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities)')
+          NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE" \
+            '.taskDefinition | 
+            .containerDefinitions[0].image = $IMAGE |
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities)')
+          
+          # Register the new task definition
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
+    
         else
           echo "Creating new task definition $TASK_DEFINITION"
+          
+          # Create a new task definition with required fields, including execution role ARN
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
             --family $TASK_DEFINITION \
             --network-mode awsvpc \
             --requires-compatibilities FARGATE \
+            --execution-role-arn $EXECUTION_ROLE_ARN \
             --cpu 256 \
             --memory 512 \
-            --container-definitions "[{\"name\":\"${{ inputs.service_name }}\",\"image\":\"$IMAGE\",\"portMappings\":[{\"containerPort\":${{ inputs.app_port }},\"hostPort\":${{ inputs.app_port }}}]}]" \
+            --container-definitions "[{\"name\":\"$SERVICE_NAME\",\"image\":\"$IMAGE\",\"portMappings\":[{\"containerPort\":$APP_PORT,\"hostPort\":$APP_PORT}],\"essential\":true}]" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
         fi
+        
         echo "TASK_DEFINITION_ARN=$NEW_TASK_DEF_ARN" >> $GITHUB_ENV
+
 
     - name: Create or update ECS service with ALB
       shell: bash
