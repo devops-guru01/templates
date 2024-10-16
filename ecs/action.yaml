@@ -43,7 +43,9 @@ inputs:
   docker_registry:
     description: 'AWS ECR Registry Like ACCOUNTID.dkr.ecr.REGION.amazonaws.com'
     required: true
-
+  execution_role_arn:
+    description: 'arn:aws:iam::123456789012:role/ecsTaskExecutionRole'
+    required: true
 runs:
   using: "composite"
   steps:
