@@ -234,7 +234,13 @@ runs:
         SECURITY_GROUP_ID: ${{ steps.setup-networking.outputs.security_group_id }}
       run: |
         # Check if the service exists
-        if aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query 'services[0]' >/dev/null 2>&1; then
+        SERVICE_EXISTS=$(aws ecs describe-services \
+          --cluster $CLUSTER_NAME \
+          --services $SERVICE_NAME \
+          --query 'services | length(@)' \
+          --output text)
+        
+        if [ "$SERVICE_EXISTS" -gt 0 ]; then
           echo "Updating existing service $SERVICE_NAME"
           aws ecs update-service \
             --cluster $CLUSTER_NAME \
@@ -243,6 +249,7 @@ runs:
             --force-new-deployment
         else
           echo "Creating new service $SERVICE_NAME with ALB"
+          
           # Create ALB
           ALB_ARN=$(aws elbv2 create-load-balancer \
             --name ${SERVICE_NAME}-alb \
@@ -251,15 +258,19 @@ runs:
             --query 'LoadBalancers[0].LoadBalancerArn' \
             --output text)
           
+          echo "Created ALB: $ALB_ARN"
+          
           # Create target group
           TG_ARN=$(aws elbv2 create-target-group \
             --name ${SERVICE_NAME}-tg \
             --protocol HTTP \
-            --port ${{ inputs.app_port }} \
+            --port 8080 \
             --vpc-id $VPC_ID \
             --target-type ip \
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
+          
+          echo "Created target group: $TG_ARN"
           
           # Create listener
           aws elbv2 create-listener \
@@ -267,6 +278,8 @@ runs:
             --protocol HTTP \
             --port 80 \
             --default-actions Type=forward,TargetGroupArn=$TG_ARN
+          
+          echo "Created listener for ALB"
           
           # Create ECS service
           aws ecs create-service \
@@ -276,5 +289,8 @@ runs:
             --desired-count 1 \
             --launch-type FARGATE \
             --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SECURITY_GROUP_ID],assignPublicIp=ENABLED}" \
-            --load-balancers "targetGroupArn=$TG_ARN,containerName=$SERVICE_NAME,containerPort=${{ inputs.app_port }}"
+            --load-balancers "targetGroupArn=$TG_ARN,containerName=$SERVICE_NAME,containerPort=8080"
+          
+          echo "Created ECS service: $SERVICE_NAME"
         fi
+
