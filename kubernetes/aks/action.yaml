@@ -117,5 +117,6 @@ runs:
         fi
 
     - name: Verify deployment
+      shell: bash  
       run: |
         kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
