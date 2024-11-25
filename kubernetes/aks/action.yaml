@@ -90,6 +90,13 @@ runs:
         docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
         docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
 
+    - name: Setup Kubeconfig
+      shell: bash
+      run: |
+        az aks install-cli
+        az aks get-credentials --resource-group AKS-Lunry --name lurny --overwrite-existing
+        kubelogin convert-kubeconfig -l azurecli
+        
     - name: Check if deployment exists
       id: check-deployment
       shell: bash
