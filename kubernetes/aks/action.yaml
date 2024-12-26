@@ -98,7 +98,7 @@ runs:
       shell: bash
       run: |
         az aks install-cli
-        az aks get-credentials --resource-group AKS-Lunry --name lurny --overwrite-existing
+        az aks get-credentials --resource-group ${{ inputs.resource_group }} --name ${{ inputs.aks_cluster_name }} --overwrite-existing
         kubelogin convert-kubeconfig -l azurecli
         
     - name: Check if deployment exists
@@ -121,7 +121,7 @@ runs:
         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
           echo "Creating deployment and service"
           kubectl create deployment ${{ inputs.service_name }} --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-          kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} --type=LoadBalancer -n ${{ inputs.k8s_namespace }}  
+          kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
         else
           echo "Updating deployment"
           kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
