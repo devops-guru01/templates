@@ -84,6 +84,7 @@ runs:
             ECR_REPOSITORY: ${{ inputs.ecr_repository }}
             IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
           run: |
+            ls -la
             docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
             docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
             echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
