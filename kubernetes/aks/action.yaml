@@ -79,7 +79,11 @@ runs:
           echo "No Dockerfile found"
           exit 1
         fi
-
+    - name: Check Files
+      id: checkfiles
+      shell: bash
+      run: |
+              ls -la
     - name: Build, tag and push image
       shell: bash
       env:
