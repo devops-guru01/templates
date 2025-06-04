@@ -94,7 +94,12 @@ runs:
     - name: Setup Kubeconfig
       shell: bash
       run: |
-        az aks install-cli
+        if ! command -v kubectl &> /dev/null; then
+          echo "kubectl not found, installing..."
+          az aks install-cli
+        else
+          echo "kubectl already installed"
+        fi
         az aks get-credentials --resource-group ${{ inputs.resource_group }} --name ${{ inputs.aks_cluster_name }} --overwrite-existing
         kubelogin convert-kubeconfig -l azurecli
         
