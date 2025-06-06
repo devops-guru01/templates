@@ -48,7 +48,7 @@ runs:
       uses: azure/login@v1
       with:
         creds: ${{ inputs.azure_credentials }}
-
+   
     - name: Get kubeconfig for AKS cluster
       uses: azure/aks-set-context@v3
       with:
@@ -100,6 +100,7 @@ runs:
         else
           echo "kubectl already installed"
         fi
+        az aks install-cli
         az aks get-credentials --resource-group ${{ inputs.resource_group }} --name ${{ inputs.aks_cluster_name }} --overwrite-existing
         kubelogin convert-kubeconfig -l azurecli
         
