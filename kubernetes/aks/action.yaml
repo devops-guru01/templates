@@ -101,7 +101,6 @@ runs:
           echo "kubectl already installed"
         fi
         az aks get-credentials --resource-group ${{ inputs.resource_group }} --name ${{ inputs.aks_cluster_name }} --overwrite-existing
-        az aks install-cli
         kubelogin convert-kubeconfig -l azurecli
 
         
