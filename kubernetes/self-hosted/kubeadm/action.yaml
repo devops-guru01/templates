@@ -117,6 +117,7 @@ runs:
         USERNAME: ${{ inputs.acr_username }}
         PASSWORD: ${{ inputs.acr_password }}
       run: |
+        export KUBECONFIG=$HOME/.kube/config
         kubectl create secret docker-registry ${{ inputs.service_name }} \
           --namespace ${{ inputs.k8s_namespace }} \
           --docker-server=${{ inputs.container_registry }} \
@@ -130,6 +131,7 @@ runs:
       env:
         KUBECONFIG: $HOME/.kube/config
       run: |
+        export KUBECONFIG=$HOME/.kube/config
         if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
         else 
@@ -145,6 +147,7 @@ runs:
 #         REPOSITORY: ${{ inputs.container_repository }}
 #         IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
 #       run: |
+          # export KUBECONFIG=$HOME/.kube/config
 #         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
 #           echo "Creating deployment and service"
 #           kubectl create deployment ${{ inputs.service_name }} \
@@ -169,4 +172,5 @@ runs:
 #       env:
 #         KUBECONFIG: $HOME/.kube/config
 #       run: |
+#         export KUBECONFIG=$HOME/.kube/config
 #         kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
