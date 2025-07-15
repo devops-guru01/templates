@@ -159,7 +159,7 @@ runs:
             -n ${{ inputs.k8s_namespace }} \
             --dry-run=client -o yaml | \
             kubectl apply -f - --dry-run=client -o yaml | \
-            sed '/spec:/a\  imagePullSecrets:\n    - name: ${{ inputs.service_name }}' | \
+            sed '/template:/a\  spec:\n    imagePullSecrets:\n      - name: ${{ inputs.service_name }}' | \
             kubectl apply -f -
           kubectl expose deployment ${{ inputs.service_name }} \
             --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
