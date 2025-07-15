@@ -118,12 +118,17 @@ runs:
         PASSWORD: ${{ inputs.acr_password }}
       run: |
         export KUBECONFIG=$HOME/.kube/config
-        kubectl create secret docker-registry ${{ inputs.service_name }} \
-          --namespace ${{ inputs.k8s_namespace }} \
-          --docker-server=${{ inputs.container_registry }} \
-          --docker-username=${{ inputs.acr_username }} \
-          --docker-password=${{ inputs.acr_password }} \
-          --dry-run=client -o yaml | kubectl apply -f -
+        if kubectl get secret ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
+          echo "Secret ${{ inputs.service_name }} already exists in namespace ${{ inputs.k8s_namespace }}"
+        else
+          echo "Creating secret ${{ inputs.service_name }}"
+          kubectl create secret docker-registry ${{ inputs.service_name }} \
+            --namespace ${{ inputs.k8s_namespace }} \
+            --docker-server=${{ inputs.container_registry }} \
+            --docker-username=${{ inputs.acr_username }} \
+            --docker-password=${{ inputs.acr_password }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+        fi
 
     - name: Check if deployment exists
       id: check-deployment
@@ -138,39 +143,37 @@ runs:
           echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
-#     - name: Deploy to AKS
-# (counts as code, continuing in same block)
-#       shell: bash
-#       env:
-#         KUBECONFIG: $HOME/.kube/config
-#         REGISTRY: ${{ inputs.container_registry }}
-#         REPOSITORY: ${{ inputs.container_repository }}
-#         IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
-#       run: |
-          # export KUBECONFIG=$HOME/.kube/config
-#         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-#           echo "Creating deployment and service"
-#           kubectl create deployment ${{ inputs.service_name }} \
-#             --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
-#             -n ${{ inputs.k8s_namespace }} \
-#             --dry-run=client -o yaml | \
-#             kubectl apply -f - --dry-run=client -o yaml | \
-#             sed '/spec:/a\    imagePullSecrets:\n    - name: ${{ inputs.service_name }}' | \
-#             kubectl apply -f -
-#           kubectl expose deployment ${{ inputs.service_name }} \
-#             --port=${{ inputs.app_port }} \
-#  Caps: -n ${{ inputs.k8s_namespace }}  
-#         else
-#           echo "Updating deployment"
-#           kubectl set image deployment/${{ inputs.service_name }} \
-#             ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
-#             -n ${{ inputs.k8s_namespace }}
-#         fi
+    - name: Deploy to Kubeadm Deployment
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+        REGISTRY: ${{ inputs.container_registry }}
+        REPOSITORY: ${{ inputs.container_repository }}
+        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+      run: |
+          export KUBECONFIG=$HOME/.kube/config
+        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
+          echo "Creating deployment and service"
+          kubectl create deployment ${{ inputs.service_name }} \
+            --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }} \
+            --dry-run=client -o yaml | \
+            kubectl apply -f - --dry-run=client -o yaml | \
+            sed '/spec:/a\    imagePullSecrets:\n    - name: ${{ inputs.service_name }}' | \
+            kubectl apply -f -
+          kubectl expose deployment ${{ inputs.service_name }} \
+            --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
+        else
+          echo "Updating deployment"
+          kubectl set image deployment/${{ inputs.service_name }} \
+            ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }}
+        fi
 
-#     - name: Verify deployment
-#       shell: bash  
-#       env:
-#         KUBECONFIG: $HOME/.kube/config
-#       run: |
-#         export KUBECONFIG=$HOME/.kube/config
-#         kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+    - name: Verify deployment
+      shell: bash  
+      env:
+        KUBECONFIG: $HOME/.kube/config
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
