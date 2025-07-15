@@ -84,6 +84,8 @@ runs:
 
     - name: Setup Kubeconfig
       shell: bash
+      env:
+        KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}
       run: |
         if ! command -v kubectl &> /dev/null; then
           echo "kubectl not found, installing..."
@@ -91,6 +93,12 @@ runs:
         else
           echo "kubectl already installed"
         fi
+        # Create kubeconfig file securely
+        echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+        export KUBECONFIG=$HOME/.kube/config
+        # Verify kubeconfig
+        kubectl cluster-info
         
     - name: Check if deployment exists
       id: check-deployment
@@ -102,23 +110,23 @@ runs:
           echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: Deploy to AKS
-      shell: bash
-      env:
-        REGISTRY: ${{ inputs.container_registry }}
-        REPOSITORY: ${{ inputs.container_repository }}
-        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
-      run: |
-        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-          echo "Creating deployment and service"
-          kubectl create deployment ${{ inputs.service_name }} --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-          kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
-        else
-          echo "Updating deployment"
-          kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-        fi
+    # - name: Deploy to AKS
+    #   shell: bash
+    #   env:
+    #     REGISTRY: ${{ inputs.container_registry }}
+    #     REPOSITORY: ${{ inputs.container_repository }}
+    #     IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+    #   run: |
+    #     if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
+    #       echo "Creating deployment and service"
+    #       kubectl create deployment ${{ inputs.service_name }} --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
+    #       kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
+    #     else
+    #       echo "Updating deployment"
+    #       kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
+    #     fi
 
-    - name: Verify deployment
-      shell: bash  
-      run: |
-        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+    # - name: Verify deployment
+    #   shell: bash  
+    #   run: |
+    #     kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
