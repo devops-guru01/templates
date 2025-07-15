@@ -1,4 +1,3 @@
-
 name: Deploy to Kubeadm Cluster
 description: "Deploy to Kubeadm Cluster"
 author: "Praveen Sansaniwal"
@@ -34,24 +33,22 @@ inputs:
     description: "Kubernetes namespace"
     required: true
     default: "default"
-  azure_credentials:
-    description: "Service principal credentials"
+  acr_username:
+    description: "ACR username"
+    required: true
+  acr_password:
+    description: "ACR password"
     required: true
 
 runs:
   using: "composite"
   steps:
-    - name: Azure login
-      uses: azure/login@v1
-      with:
-        creds: ${{ inputs.azure_credentials }}
-   
     - name: Login to ACR
       uses: azure/docker-login@v1
       with:
         login-server: ${{ inputs.container_registry }}
-        username: ${{ fromJSON(inputs.azure_credentials).clientId }}
-        password: ${{ fromJSON(inputs.azure_credentials).clientSecret }}
+        username: ${{ inputs.acr_username }}
+        password: ${{ inputs.acr_password }}
 
     - name: Determine Dockerfile path
       id: dockerfile-path
@@ -67,11 +64,13 @@ runs:
           echo "No Dockerfile found"
           exit 1
         fi
+
     - name: Check Files
       id: checkfiles
       shell: bash
       run: |
-              ls -la
+        ls -la
+
     - name: Build, tag and push image
       shell: bash
       env:
@@ -99,10 +98,27 @@ runs:
         export KUBECONFIG=$HOME/.kube/config
         # Verify kubeconfig
         kubectl cluster-info
-        
+
+    - name: Create Docker config secret
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+        REGISTRY: ${{ inputs.container_registry }}
+        USERNAME: ${{ inputs.acr_username }}
+        PASSWORD: ${{ inputs.acr_password }}
+      run: |
+        kubectl create secret docker-registry ${{ inputs.service_name }} \
+          --namespace ${{ inputs.k8s_namespace }} \
+          --docker-server=${{ inputs.container_registry }} \
+          --docker-username=${{ inputs.acr_username }} \
+          --docker-password=${{ inputs.acr_password }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+
     - name: Check if deployment exists
       id: check-deployment
       shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
       run: |
         if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
@@ -110,23 +126,37 @@ runs:
           echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
-    # - name: Deploy to AKS
-    #   shell: bash
-    #   env:
-    #     REGISTRY: ${{ inputs.container_registry }}
-    #     REPOSITORY: ${{ inputs.container_repository }}
-    #     IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
-    #   run: |
-    #     if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-    #       echo "Creating deployment and service"
-    #       kubectl create deployment ${{ inputs.service_name }} --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-    #       kubectl expose deployment ${{ inputs.service_name }} --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
-    #     else
-    #       echo "Updating deployment"
-    #       kubectl set image deployment/${{ inputs.service_name }} ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG -n ${{ inputs.k8s_namespace }}
-    #     fi
+    - name: Deploy to AKS
+(counts as code, continuing in same block)
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+        REGISTRY: ${{ inputs.container_registry }}
+        REPOSITORY: ${{ inputs.container_repository }}
+        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+      run: |
+        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
+          echo "Creating deployment and service"
+          kubectl create deployment ${{ inputs.service_name }} \
+            --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }} \
+            --dry-run=client -o yaml | \
+            kubectl apply -f - --dry-run=client -o yaml | \
+            sed '/spec:/a\    imagePullSecrets:\n    - name: ${{ inputs.service_name }}' | \
+            kubectl apply -f -
+          kubectl expose deployment ${{ inputs.service_name }} \
+            --port=${{ inputs.app_port }} \
+ Caps: -n ${{ inputs.k8s_namespace }}  
+        else
+          echo "Updating deployment"
+          kubectl set image deployment/${{ inputs.service_name }} \
+            ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }}
+        fi
 
-    # - name: Verify deployment
-    #   shell: bash  
-    #   run: |
-    #     kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+    - name: Verify deployment
+      shell: bash  
+      env:
+        KUBECONFIG: $HOME/.kube/config
+      run: |
+        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
