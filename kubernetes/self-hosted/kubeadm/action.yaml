@@ -1,6 +1,6 @@
 
-name: Deploy to Azure AKS
-description: "Deploy to Azure AKS"
+name: Deploy to Kubeadm Cluster
+description: "Deploy to Kubeadm Cluster"
 author: "Praveen Sansaniwal"
 inputs:
   deploy_branch:
