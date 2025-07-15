@@ -92,12 +92,22 @@ runs:
         else
           echo "kubectl already installed"
         fi
-        # Create kubeconfig file securely
+        # Check if KUBECONFIG_CONTENT is empty
+        if [ -z "$KUBECONFIG_CONTENT" ]; then
+          echo "Error: KUBECONFIG_CONTENT is empty. Please check the kubeconfig input."
+          exit 1
+        fi
+        # Create .kube directory if it doesn't exist
+        mkdir -p $HOME/.kube
+        # Write kubeconfig file securely
         echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
         export KUBECONFIG=$HOME/.kube/config
         # Verify kubeconfig
-        kubectl cluster-info
+        kubectl cluster-info || {
+          echo "Error: Failed to connect to cluster with provided kubeconfig"
+          exit 1
+        }
 
     - name: Create Docker config secret
       shell: bash
