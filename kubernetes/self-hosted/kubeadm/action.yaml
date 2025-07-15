@@ -160,14 +160,19 @@ runs:
           if command -v yq &> /dev/null; then
             yq eval '.spec.template.spec.imagePullSecrets = [{"name": "${{ inputs.service_name }}"}]' deployment.yaml > modified.yaml
           else
-            # Fallback using sed with correct pattern
-            sed '/^[[:space:]]*spec:[[:space:]]*$/,/^[[:space:]]*containers:[[:space:]]*$/ {
-              /^[[:space:]]*containers:[[:space:]]*$/ i\
-      imagePullSecrets:\
-      - name: ${{ inputs.service_name }}
-            }' deployment.yaml > modified.yaml
+            # Fallback using awk to add imagePullSecrets at the correct location
+            awk '
+            /^[[:space:]]*spec:[[:space:]]*$/ && in_template {
+              print $0
+              print "      imagePullSecrets:"
+              print "      - name: ${{ inputs.service_name }}"
+              next
+            }
+            /^[[:space:]]*template:[[:space:]]*$/ { in_template = 1 }
+            /^[[:space:]]*containers:[[:space:]]*$/ && in_template { in_template = 0 }
+            { print }
+            ' deployment.yaml > modified.yaml
           fi
-          
           cat modified.yaml 
           kubectl apply -f modified.yaml          
           kubectl expose deployment ${{ inputs.service_name }} \
