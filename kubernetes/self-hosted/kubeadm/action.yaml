@@ -153,14 +153,13 @@ runs:
       run: |
         export KUBECONFIG=$HOME/.kube/config
         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-          echo "Creating deployment and service"
           kubectl create deployment ${{ inputs.service_name }} \
             --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
             -n ${{ inputs.k8s_namespace }} \
-            --dry-run=client -o yaml | \
-            kubectl apply -f - --dry-run=client -o yaml | \
-            sed '/template:\n *spec:/a\  imagePullSecrets:\n    - name: ${{ inputs.service_name }}' | \
-            kubectl apply -f -
+            --dry-run=client -o yaml > deployment.yaml
+          sed -E '/template:[[:space:]]*$/,/[[:space:]]*spec:[[:space:]]*$/ s/[[:space:]]*spec:[[:space:]]*$/&\n  imagePullSecrets:\n    - name: ${{ inputs.service_name }}/' deployment.yaml > modified.yaml
+          cat modified.yaml 
+          kubectl apply -f modified.yaml          
           kubectl expose deployment ${{ inputs.service_name }} \
             --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
         else
