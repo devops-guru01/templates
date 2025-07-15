@@ -151,7 +151,7 @@ runs:
         REPOSITORY: ${{ inputs.container_repository }}
         IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
       run: |
-          export KUBECONFIG=$HOME/.kube/config
+        export KUBECONFIG=$HOME/.kube/config
         if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
           echo "Creating deployment and service"
           kubectl create deployment ${{ inputs.service_name }} \
