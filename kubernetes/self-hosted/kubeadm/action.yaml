@@ -157,7 +157,17 @@ runs:
             --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
             -n ${{ inputs.k8s_namespace }} \
             --dry-run=client -o yaml > deployment.yaml
-          sed -E '/template:[[:space:]]*$/,/[[:space:]]*spec:[[:space:]]*$/ s/[[:space:]]*spec:[[:space:]]*$/&\n  imagePullSecrets:\n    - name: ${{ inputs.service_name }}/' deployment.yaml > modified.yaml
+          if command -v yq &> /dev/null; then
+            yq eval '.spec.template.spec.imagePullSecrets = [{"name": "${{ inputs.service_name }}"}]' deployment.yaml > modified.yaml
+          else
+            # Fallback using sed with correct pattern
+            sed '/^[[:space:]]*spec:[[:space:]]*$/,/^[[:space:]]*containers:[[:space:]]*$/ {
+              /^[[:space:]]*containers:[[:space:]]*$/ i\
+      imagePullSecrets:\
+      - name: ${{ inputs.service_name }}
+            }' deployment.yaml > modified.yaml
+          fi
+          
           cat modified.yaml 
           kubectl apply -f modified.yaml          
           kubectl expose deployment ${{ inputs.service_name }} \
