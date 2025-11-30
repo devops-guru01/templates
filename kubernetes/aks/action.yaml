@@ -63,6 +63,7 @@ runs:
         password: ${{ fromJSON(inputs.azure_credentials).clientSecret }}
         
     - name: Free space
+      shell: bash
       run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
