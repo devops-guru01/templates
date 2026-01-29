@@ -91,6 +91,7 @@ runs:
         docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
         docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
         docker system prune -f
+        docker buildx prune -a -f
     - name: Setup Kubeconfig
       shell: bash
       run: |
