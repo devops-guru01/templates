@@ -1,1 +1,193 @@
+name: Deploy to Kubeadm Cluster
+description: "Deploy to Kubeadm Cluster"
+author: "Praveen Sansaniwal"
+inputs:
+  deploy_branch:
+    description: "Branch to deploy from"
+    required: false
+    default: "main"
+  container_registry:
+    description: "ACR name like lunryai.azurecr.io"
+    required: true
+  container_repository:
+    description: "Container repository"
+    required: true
+    default: "my-app"
+  service_name:
+    description: "Service name"
+    required: true
+    default: "MyService"
+  kubeconfig:
+    description: "Cluster Kubeconfig"
+    required: true
+    default: ""
+  dockerfile_path:
+    description: "Path to Dockerfile"
+    required: true
+    default: "Dockerfile"
+  app_port:
+    description: "Application port"
+    required: true
+    default: "80"
+  k8s_namespace:
+    description: "Kubernetes namespace"
+    required: true
+    default: "default"
+  acr_username:
+    description: "ACR username"
+    required: true
+  acr_password:
+    description: "ACR password"
+    required: true
 
+runs:
+  using: "composite"
+  steps:
+    - name: Login to ACR
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ inputs.container_registry }}
+        username: ${{ inputs.acr_username }}
+        password: ${{ inputs.acr_password }}
+
+    - name: Determine Dockerfile path
+      id: dockerfile-path
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.dockerfile_path }}" ]; then
+          echo "DOCKERFILE=${{ inputs.dockerfile_path }}" >> $GITHUB_OUTPUT
+        elif [ -f "dockerfile" ]; then
+          echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT 
+        elif [ -f "Dockerfile" ]; then
+          echo "DOCKERFILE=Dockerfile" >> $GITHUB_OUTPUT
+        else
+          echo "No Dockerfile found"
+          exit 1
+        fi
+
+    - name: Check Files
+      id: checkfiles
+      shell: bash
+      run: |
+        ls -la
+
+    - name: Build, tag and push image
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.container_registry }}
+        REPOSITORY: ${{ inputs.container_repository }}
+        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+      run: |
+        docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
+        docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+    - name: Setup Kubeconfig
+      shell: bash
+      env:
+        KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}
+      run: |
+        if ! command -v kubectl &> /dev/null; then
+          echo "kubectl not found, installing..."
+          az aks install-cli
+        else
+          echo "kubectl already installed"
+        fi
+        # Check if KUBECONFIG_CONTENT is empty
+        if [ -z "$KUBECONFIG_CONTENT" ]; then
+          echo "Error: KUBECONFIG_CONTENT is empty. Please check the kubeconfig input."
+          exit 1
+        fi
+        # Create .kube directory if it doesn't exist
+        mkdir -p $HOME/.kube
+        # Write kubeconfig file securely
+        echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+        export KUBECONFIG=$HOME/.kube/config
+        # Verify kubeconfig
+        kubectl cluster-info || {
+          echo "Error: Failed to connect to cluster with provided kubeconfig"
+          exit 1
+        }
+
+    - name: Create Docker config secret
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+        REGISTRY: ${{ inputs.container_registry }}
+        USERNAME: ${{ inputs.acr_username }}
+        PASSWORD: ${{ inputs.acr_password }}
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        if kubectl get secret ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
+          echo "Secret ${{ inputs.service_name }} already exists in namespace ${{ inputs.k8s_namespace }}"
+        else
+          echo "Creating secret ${{ inputs.service_name }}"
+          kubectl create secret docker-registry ${{ inputs.service_name }} \
+            --namespace ${{ inputs.k8s_namespace }} \
+            --docker-server=${{ inputs.container_registry }} \
+            --docker-username=${{ inputs.acr_username }} \
+            --docker-password=${{ inputs.acr_password }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+        fi
+
+    - name: Check if deployment exists
+      id: check-deployment
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else 
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Deploy to Kubeadm Deployment
+      shell: bash
+      env:
+        KUBECONFIG: $HOME/.kube/config
+        REGISTRY: ${{ inputs.container_registry }}
+        REPOSITORY: ${{ inputs.container_repository }}
+        IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
+          kubectl create deployment ${{ inputs.service_name }} \
+            --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }} \
+            --dry-run=client -o yaml > deployment.yaml
+          if command -v yq &> /dev/null; then
+            yq eval '.spec.template.spec.imagePullSecrets = [{"name": "${{ inputs.service_name }}"}]' deployment.yaml > modified.yaml
+          else
+            # Fallback using awk to add imagePullSecrets at the correct location
+            awk '
+            /^[[:space:]]*spec:[[:space:]]*$/ && in_template {
+              print $0
+              print "      imagePullSecrets:"
+              print "      - name: ${{ inputs.service_name }}"
+              next
+            }
+            /^[[:space:]]*template:[[:space:]]*$/ { in_template = 1 }
+            /^[[:space:]]*containers:[[:space:]]*$/ && in_template { in_template = 0 }
+            { print }
+            ' deployment.yaml > modified.yaml
+          fi
+          cat modified.yaml 
+          kubectl apply -f modified.yaml          
+          kubectl expose deployment ${{ inputs.service_name }} \
+            --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
+        else
+          echo "Updating deployment"
+          kubectl set image deployment/${{ inputs.service_name }} \
+            ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            -n ${{ inputs.k8s_namespace }}
+        fi
+
+    - name: Verify deployment
+      shell: bash  
+      env:
+        KUBECONFIG: $HOME/.kube/config
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
