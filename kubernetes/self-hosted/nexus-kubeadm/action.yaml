@@ -551,11 +551,50 @@ runs:
     - name: Verify deployment
       shell: bash
       env:
-        KUBECONFIG: $HOME/.kube/config
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        NAMESPACE: ${{ inputs.k8s_namespace }}
+        SERVICE_NAME: ${{ inputs.service_name }}
       run: |
-        export KUBECONFIG=$HOME/.kube/config
+        RANCHER_AVAILABLE="${{ steps.rancher-check.outputs.rancher_available }}"
+
         echo "Waiting for deployment rollout to complete..."
-        kubectl rollout status deployment/${{ inputs.service_name }} \
-          -n ${{ inputs.k8s_namespace }} \
-          --timeout=300s
-        echo "Deployment verified successfully"
+
+        if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+          # Poll Rancher API for deployment status
+          MAX_WAIT=300
+          INTERVAL=10
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            DEPLOY_JSON=$(curl -s \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/${SERVICE_NAME}")
+
+            DESIRED=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('spec',{}).get('replicas',1))" 2>/dev/null || echo "1")
+            READY=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('readyReplicas',0))" 2>/dev/null || echo "0")
+            UPDATED=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('updatedReplicas',0))" 2>/dev/null || echo "0")
+            AVAILABLE=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('availableReplicas',0))" 2>/dev/null || echo "0")
+
+            echo "  [${ELAPSED}s] desired=${DESIRED} updated=${UPDATED} ready=${READY} available=${AVAILABLE}"
+
+            if [ "$READY" -ge "$DESIRED" ] && [ "$UPDATED" -ge "$DESIRED" ] && [ "$AVAILABLE" -ge "$DESIRED" ] 2>/dev/null; then
+              echo "Deployment '${SERVICE_NAME}' rolled out successfully"
+              exit 0
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "ERROR: Deployment rollout timed out after ${MAX_WAIT}s"
+          exit 1
+        else
+          # Fallback to kubectl
+          export KUBECONFIG=$HOME/.kube/config
+          kubectl rollout status deployment/${SERVICE_NAME} \
+            -n ${NAMESPACE} \
+            --timeout=300s
+          echo "Deployment verified successfully"
+        fi
