@@ -47,7 +47,6 @@ inputs:
   project_id:
     description: "Rancher project ID (e.g. p-xxxxx)"
     required: true
-
 runs:
   using: "composite"
   steps:

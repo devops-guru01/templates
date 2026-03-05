@@ -1,0 +1,56 @@
+# Sample workflow — copy to any repo as .github/workflows/runner-cleanup.yml
+# Or keep in the templates repo and trigger via workflow_dispatch
+#
+# NOTE: Nexus image retention is handled server-side via Nexus cleanup policies.
+#       Configure in Nexus Admin → Repository → Cleanup Policies:
+#         - Component Age: e.g. 30 days
+#         - Last Downloaded: e.g. 14 days
+#       Then schedule "Compact blob store" task to reclaim disk.
+#
+name: Runner Cleanup
+on:
+  schedule:
+    # Runs daily at 2 AM UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      runners:
+        description: "Comma-separated runner labels (e.g. dev,staging,prod)"
+        required: false
+        default: "dev"
+      aggressive:
+        description: "Force aggressive cleanup (remove ALL unused images and cache)"
+        required: false
+        default: "false"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      runner_matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build runner matrix
+        id: set-matrix
+        shell: bash
+        run: |
+          # Default list for scheduled runs, input for manual dispatch
+          RUNNERS="${{ github.event.inputs.runners || 'dev' }}"
+          # Convert comma-separated to JSON array: "dev,staging" -> ["dev","staging"]
+          MATRIX=$(echo "$RUNNERS" | tr -d ' ' | jq -R 'split(",")' -c)
+          echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+          echo "Runners to clean: ${MATRIX}"
+
+  cleanup:
+    needs: prepare
+    strategy:
+      matrix:
+        runner: ${{ fromJson(needs.prepare.outputs.runner_matrix) }}
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Runner Cleanup (${{ matrix.runner }})
+        uses: devops-guru01/templates/runner-management@main
+        with:
+          docker_cache_max_age: "24h"
+          image_max_age: "168h"
+          disk_usage_threshold: ${{ github.event.inputs.aggressive == 'true' && '0' || '80' }}

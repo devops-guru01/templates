@@ -1,0 +1,129 @@
+name: Runner Management - Docker Cleanup
+description: "Cleanup Docker build cache, dangling images, exited containers, and unused volumes on self-hosted runners. Nexus image retention should be handled via Nexus cleanup policies (server-side)."
+author: "Praveen Sansaniwal"
+inputs:
+  docker_cache_max_age:
+    description: "Max age for Docker build cache (e.g. 24h, 72h, 168h)"
+    required: false
+    default: "24h"
+  image_max_age:
+    description: "Max age for unused Docker images (e.g. 168h = 7 days)"
+    required: false
+    default: "168h"
+  disk_usage_threshold:
+    description: "Trigger aggressive cleanup if disk usage exceeds this percentage (0 = skip check)"
+    required: false
+    default: "80"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Disk usage before cleanup
+      id: disk-before
+      shell: bash
+      run: |
+        echo "=== Disk Usage Before Cleanup ==="
+        df -h / | tail -1
+        echo ""
+        echo "Docker disk usage:"
+        docker system df 2>/dev/null || echo "Docker not available"
+        echo ""
+
+        # Check if disk usage exceeds threshold
+        USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+        THRESHOLD="${{ inputs.disk_usage_threshold }}"
+        echo "Current disk usage: ${USAGE}%"
+        echo "Threshold: ${THRESHOLD}%"
+        echo "disk_usage=${USAGE}" >> $GITHUB_OUTPUT
+
+        if [ "${THRESHOLD}" -gt 0 ] && [ "${USAGE}" -ge "${THRESHOLD}" ]; then
+          echo "disk_critical=true" >> $GITHUB_OUTPUT
+          echo "WARNING: Disk usage (${USAGE}%) exceeds threshold (${THRESHOLD}%). Aggressive cleanup will be triggered."
+        else
+          echo "disk_critical=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Docker build cache cleanup
+      shell: bash
+      env:
+        MAX_AGE: ${{ inputs.docker_cache_max_age }}
+        DISK_CRITICAL: ${{ steps.disk-before.outputs.disk_critical }}
+      run: |
+        echo "=== Docker Build Cache Cleanup ==="
+
+        # Remove dangling images (untagged layers)
+        DANGLING=$(docker images -f "dangling=true" -q 2>/dev/null)
+        if [ -n "$DANGLING" ]; then
+          DANGLING_COUNT=$(echo "$DANGLING" | wc -l | tr -d ' ')
+          echo "Removing ${DANGLING_COUNT} dangling images..."
+          docker rmi $DANGLING 2>/dev/null || true
+        else
+          echo "No dangling images found"
+        fi
+
+        # Remove exited containers
+        EXITED=$(docker ps -a -f "status=exited" -q 2>/dev/null)
+        if [ -n "$EXITED" ]; then
+          EXITED_COUNT=$(echo "$EXITED" | wc -l | tr -d ' ')
+          echo "Removing ${EXITED_COUNT} exited containers..."
+          docker rm $EXITED 2>/dev/null || true
+        else
+          echo "No exited containers found"
+        fi
+
+        # Prune build cache
+        if [ "${DISK_CRITICAL}" == "true" ]; then
+          echo "AGGRESSIVE MODE: Pruning ALL Docker build cache..."
+          docker builder prune -af 2>/dev/null || true
+        else
+          echo "Pruning Docker build cache older than ${MAX_AGE}..."
+          docker builder prune -f --filter "until=${MAX_AGE}" 2>/dev/null || true
+        fi
+
+        # Remove unused volumes
+        echo "Removing unused Docker volumes..."
+        docker volume prune -f 2>/dev/null || true
+
+        # Remove unused networks
+        echo "Removing unused Docker networks..."
+        docker network prune -f 2>/dev/null || true
+
+        echo "Docker cache cleanup complete"
+
+    - name: Remove old application images
+      shell: bash
+      env:
+        IMAGE_MAX_AGE: ${{ inputs.image_max_age }}
+        DISK_CRITICAL: ${{ steps.disk-before.outputs.disk_critical }}
+      run: |
+        echo "=== Old Application Image Cleanup ==="
+
+        if [ "${DISK_CRITICAL}" == "true" ]; then
+          echo "AGGRESSIVE MODE: Removing all images not used by running containers..."
+          docker image prune -af 2>/dev/null || true
+        else
+          echo "Removing unused images older than ${IMAGE_MAX_AGE}..."
+          docker image prune -af --filter "until=${IMAGE_MAX_AGE}" 2>/dev/null || true
+        fi
+
+        echo "Image cleanup complete"
+
+    - name: Containerd image cleanup
+      shell: bash
+      run: |
+        echo "=== Containerd Cleanup ==="
+        if command -v crictl &> /dev/null; then
+          echo "crictl found. Cleaning unused container images..."
+          crictl rmi --prune 2>/dev/null || echo "crictl cleanup skipped (may need root)"
+        else
+          echo "crictl not found. Skipping containerd cleanup."
+        fi
+
+    - name: Disk usage after cleanup
+      shell: bash
+      run: |
+        echo "=== Disk Usage After Cleanup ==="
+        df -h / | tail -1
+        echo ""
+        echo "Docker disk usage:"
+        docker system df 2>/dev/null || echo "Docker not available"
