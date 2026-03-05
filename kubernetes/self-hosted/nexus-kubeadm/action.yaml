@@ -1,24 +1,26 @@
-name: Deploy to Kubeadm Cluster
-description: "Deploy to Kubeadm Cluster"
+name: Deploy to Kubeadm Cluster via Nexus + Rancher
+description: "Build and push Docker image to Nexus Registry, deploy to kubeadm cluster using Rancher API with kubectl fallback"
 author: "Praveen Sansaniwal"
 inputs:
-  deploy_branch:
-    description: "Branch to deploy from"
-    required: false
-    default: "main"
-  container_registry:
-    description: "ACR name like lunryai.azurecr.io"
+  nexus_registry:
+    description: "Nexus Docker Registry URL (subdomain-based, e.g. docker.nexus.mycompany.com)"
     required: true
-  container_repository:
-    description: "Container repository"
+  nexus_username:
+    description: "Nexus registry username"
+    required: true
+  nexus_password:
+    description: "Nexus registry password"
+    required: true
+  nexus_repository:
+    description: "Repository name within Nexus"
     required: true
     default: "my-app"
   service_name:
-    description: "Service name"
+    description: "Service name (used for deployment, service, and secret naming)"
     required: true
     default: "MyService"
   kubeconfig:
-    description: "Cluster Kubeconfig"
+    description: "Cluster Kubeconfig (used for kubectl fallback and deployment verification)"
     required: true
     default: ""
   dockerfile_path:
@@ -33,22 +35,34 @@ inputs:
     description: "Kubernetes namespace"
     required: true
     default: "default"
-  acr_username:
-    description: "ACR username"
+  rancher_url:
+    description: "Rancher server URL without https:// prefix or trailing slash (e.g. rancher.mycompany.com)"
     required: true
-  acr_password:
-    description: "ACR password"
+  rancher_token:
+    description: "Rancher API Bearer token (format: token-xxxxx:yyyyyy)"
+    required: true
+  cluster_id:
+    description: "Rancher cluster ID (e.g. c-m-xxxxxxxx)"
+    required: true
+  project_id:
+    description: "Rancher project ID (e.g. p-xxxxx)"
     required: true
 
 runs:
   using: "composite"
   steps:
-    - name: Login to ACR
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ inputs.container_registry }}
-        username: ${{ inputs.acr_username }}
-        password: ${{ inputs.acr_password }}
+    - name: Login to Nexus Docker Registry
+      shell: bash
+      env:
+        NEXUS_REGISTRY: ${{ inputs.nexus_registry }}
+        NEXUS_USERNAME: ${{ inputs.nexus_username }}
+        NEXUS_PASSWORD: ${{ inputs.nexus_password }}
+      run: |
+        echo "Logging in to Nexus Docker Registry at ${NEXUS_REGISTRY}..."
+        echo "${NEXUS_PASSWORD}" | docker login "${NEXUS_REGISTRY}" \
+          --username "${NEXUS_USERNAME}" \
+          --password-stdin
+        echo "Successfully logged in to Nexus Docker Registry"
 
     - name: Determine Dockerfile path
       id: dockerfile-path
@@ -57,7 +71,7 @@ runs:
         if [ -f "${{ inputs.dockerfile_path }}" ]; then
           echo "DOCKERFILE=${{ inputs.dockerfile_path }}" >> $GITHUB_OUTPUT
         elif [ -f "dockerfile" ]; then
-          echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT 
+          echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT
         elif [ -f "Dockerfile" ]; then
           echo "DOCKERFILE=Dockerfile" >> $GITHUB_OUTPUT
         else
@@ -71,123 +85,479 @@ runs:
       run: |
         ls -la
 
-    - name: Build, tag and push image
+    - name: Build, tag and push image to Nexus
       shell: bash
       env:
-        REGISTRY: ${{ inputs.container_registry }}
-        REPOSITORY: ${{ inputs.container_repository }}
+        REGISTRY: ${{ inputs.nexus_registry }}
+        REPOSITORY: ${{ inputs.nexus_repository }}
         IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
       run: |
-        docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
-        docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+        FULL_IMAGE="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+        echo "Building image: ${FULL_IMAGE}"
+        docker build -t "${FULL_IMAGE}" -f ${{ steps.dockerfile-path.outputs.DOCKERFILE }} .
+        echo "Pushing image: ${FULL_IMAGE}"
+        docker push "${FULL_IMAGE}"
+        echo "Successfully pushed ${FULL_IMAGE}"
 
     - name: Setup Kubeconfig
       shell: bash
       env:
         KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}
       run: |
+        # Install kubectl via curl if not present
         if ! command -v kubectl &> /dev/null; then
-          echo "kubectl not found, installing..."
-          az aks install-cli
+          echo "kubectl not found, installing via dl.k8s.io..."
+          KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+          echo "Latest stable kubectl version: ${KUBECTL_VERSION}"
+          curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          echo "kubectl installed: $(kubectl version --client 2>/dev/null)"
         else
-          echo "kubectl already installed"
+          echo "kubectl already installed: $(kubectl version --client 2>/dev/null)"
         fi
-        # Check if KUBECONFIG_CONTENT is empty
+
+        # Validate kubeconfig content
         if [ -z "$KUBECONFIG_CONTENT" ]; then
           echo "Error: KUBECONFIG_CONTENT is empty. Please check the kubeconfig input."
           exit 1
         fi
-        # Create .kube directory if it doesn't exist
+
+        # Write kubeconfig securely
         mkdir -p $HOME/.kube
-        # Write kubeconfig file securely
         echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
         export KUBECONFIG=$HOME/.kube/config
-        # Verify kubeconfig
+
+        # Verify connectivity (warning only — Rancher API is the primary path)
         kubectl cluster-info || {
-          echo "Error: Failed to connect to cluster with provided kubeconfig"
-          exit 1
+          echo "WARNING: Failed to connect to cluster with provided kubeconfig."
+          echo "kubectl fallback path may not work, but Rancher API may still be available."
         }
 
-    - name: Create Docker config secret
+    - name: Check Rancher API connectivity
+      id: rancher-check
       shell: bash
       env:
-        KUBECONFIG: $HOME/.kube/config
-        REGISTRY: ${{ inputs.container_registry }}
-        USERNAME: ${{ inputs.acr_username }}
-        PASSWORD: ${{ inputs.acr_password }}
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+      run: |
+        echo "Checking Rancher API connectivity at https://${RANCHER_URL}/v3..."
+
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          --connect-timeout 10 \
+          --max-time 15 \
+          -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+          "https://${RANCHER_URL}/v3/clusters/${CLUSTER_ID}")
+
+        echo "Rancher API response status: ${HTTP_STATUS}"
+
+        if [ "${HTTP_STATUS}" -ge 200 ] && [ "${HTTP_STATUS}" -lt 400 ]; then
+          echo "Rancher API is reachable (HTTP ${HTTP_STATUS})"
+          echo "rancher_available=true" >> $GITHUB_OUTPUT
+        else
+          echo "WARNING: Rancher API is unreachable (HTTP ${HTTP_STATUS}). Falling back to kubectl."
+          echo "rancher_available=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Auto-create namespace
+      shell: bash
+      env:
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        NAMESPACE: ${{ inputs.k8s_namespace }}
       run: |
         export KUBECONFIG=$HOME/.kube/config
-        if kubectl get secret ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
-          echo "Secret ${{ inputs.service_name }} already exists in namespace ${{ inputs.k8s_namespace }}"
+        RANCHER_AVAILABLE="${{ steps.rancher-check.outputs.rancher_available }}"
+
+        if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+          echo "Checking namespace '${NAMESPACE}' via Rancher API..."
+
+          NS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+            "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces/${NAMESPACE}")
+
+          if [ "${NS_STATUS}" == "200" ]; then
+            echo "Namespace '${NAMESPACE}' already exists"
+          else
+            echo "Namespace '${NAMESPACE}' not found (HTTP ${NS_STATUS}). Creating via Rancher API..."
+
+            CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"apiVersion\": \"v1\",
+                \"kind\": \"Namespace\",
+                \"metadata\": {
+                  \"name\": \"${NAMESPACE}\",
+                  \"annotations\": {
+                    \"field.cattle.io/projectId\": \"${CLUSTER_ID}:${PROJECT_ID}\"
+                  },
+                  \"labels\": {
+                    \"field.cattle.io/projectId\": \"${PROJECT_ID}\"
+                  }
+                }
+              }" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces")
+
+            CREATE_STATUS=$(echo "$CREATE_RESPONSE" | tail -1)
+            CREATE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
+
+            if [ "${CREATE_STATUS}" -ge 200 ] && [ "${CREATE_STATUS}" -lt 300 ]; then
+              echo "Namespace '${NAMESPACE}' created successfully via Rancher API"
+            else
+              echo "WARNING: Failed to create namespace via Rancher API (HTTP ${CREATE_STATUS})"
+              echo "Response: ${CREATE_BODY}"
+              echo "Falling back to kubectl..."
+              kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+            fi
+          fi
         else
-          echo "Creating secret ${{ inputs.service_name }}"
-          kubectl create secret docker-registry ${{ inputs.service_name }} \
-            --namespace ${{ inputs.k8s_namespace }} \
-            --docker-server=${{ inputs.container_registry }} \
-            --docker-username=${{ inputs.acr_username }} \
-            --docker-password=${{ inputs.acr_password }} \
+          echo "Rancher unavailable. Checking namespace via kubectl..."
+          if ! kubectl get namespace "${NAMESPACE}" &> /dev/null; then
+            kubectl create namespace "${NAMESPACE}"
+            echo "Namespace '${NAMESPACE}' created via kubectl"
+          else
+            echo "Namespace '${NAMESPACE}' already exists"
+          fi
+        fi
+
+    - name: Create Docker pull secret for Nexus
+      shell: bash
+      env:
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        NAMESPACE: ${{ inputs.k8s_namespace }}
+        REGISTRY: ${{ inputs.nexus_registry }}
+        USERNAME: ${{ inputs.nexus_username }}
+        PASSWORD: ${{ inputs.nexus_password }}
+        SECRET_NAME: ${{ inputs.service_name }}-nexus-pull-secret
+      run: |
+        export KUBECONFIG=$HOME/.kube/config
+        RANCHER_AVAILABLE="${{ steps.rancher-check.outputs.rancher_available }}"
+
+        # Generate dockerconfigjson content
+        AUTH_STRING=$(echo -n "${USERNAME}:${PASSWORD}" | base64 | tr -d '\n')
+        DOCKER_CONFIG_JSON=$(echo -n "{\"auths\":{\"${REGISTRY}\":{\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\",\"auth\":\"${AUTH_STRING}\"}}}" | base64 | tr -d '\n')
+
+        if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+          echo "Managing Docker pull secret '${SECRET_NAME}' via Rancher API..."
+
+          # Check if secret exists
+          SECRET_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+            "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces/${NAMESPACE}/secrets/${SECRET_NAME}")
+
+          SECRET_PAYLOAD="{
+            \"apiVersion\": \"v1\",
+            \"kind\": \"Secret\",
+            \"metadata\": {
+              \"name\": \"${SECRET_NAME}\",
+              \"namespace\": \"${NAMESPACE}\"
+            },
+            \"type\": \"kubernetes.io/dockerconfigjson\",
+            \"data\": {
+              \".dockerconfigjson\": \"${DOCKER_CONFIG_JSON}\"
+            }
+          }"
+
+          if [ "${SECRET_STATUS}" == "200" ]; then
+            echo "Secret exists. Updating via PUT..."
+            RESULT=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X PUT \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "${SECRET_PAYLOAD}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces/${NAMESPACE}/secrets/${SECRET_NAME}")
+          else
+            echo "Secret does not exist. Creating via POST..."
+            RESULT=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "${SECRET_PAYLOAD}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces/${NAMESPACE}/secrets")
+          fi
+
+          echo "Secret operation result: HTTP ${RESULT}"
+          if [ "${RESULT}" -lt 200 ] || [ "${RESULT}" -ge 300 ]; then
+            echo "WARNING: Rancher API secret operation failed. Falling back to kubectl..."
+            kubectl create secret docker-registry "${SECRET_NAME}" \
+              --namespace "${NAMESPACE}" \
+              --docker-server="${REGISTRY}" \
+              --docker-username="${USERNAME}" \
+              --docker-password="${PASSWORD}" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+        else
+          echo "Creating Docker pull secret via kubectl..."
+          kubectl create secret docker-registry "${SECRET_NAME}" \
+            --namespace "${NAMESPACE}" \
+            --docker-server="${REGISTRY}" \
+            --docker-username="${USERNAME}" \
+            --docker-password="${PASSWORD}" \
             --dry-run=client -o yaml | kubectl apply -f -
         fi
+        echo "Docker pull secret '${SECRET_NAME}' is ready"
 
     - name: Check if deployment exists
       id: check-deployment
       shell: bash
       env:
-        KUBECONFIG: $HOME/.kube/config
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        NAMESPACE: ${{ inputs.k8s_namespace }}
+        SERVICE_NAME: ${{ inputs.service_name }}
       run: |
         export KUBECONFIG=$HOME/.kube/config
-        if kubectl get deployment ${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }} &> /dev/null; then
-          echo "exists=true" >> $GITHUB_OUTPUT
-        else 
-          echo "exists=false" >> $GITHUB_OUTPUT
+        RANCHER_AVAILABLE="${{ steps.rancher-check.outputs.rancher_available }}"
+
+        if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+          echo "Checking deployment '${SERVICE_NAME}' via Rancher API..."
+
+          DEP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+            "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/${SERVICE_NAME}")
+
+          if [ "${DEP_STATUS}" == "200" ]; then
+            echo "Deployment '${SERVICE_NAME}' exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Deployment '${SERVICE_NAME}' not found (HTTP ${DEP_STATUS})"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Checking deployment via kubectl..."
+          if kubectl get deployment "${SERVICE_NAME}" -n "${NAMESPACE}" &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
         fi
 
-    - name: Deploy to Kubeadm Deployment
+    - name: Deploy to Kubernetes
       shell: bash
       env:
-        KUBECONFIG: $HOME/.kube/config
-        REGISTRY: ${{ inputs.container_registry }}
-        REPOSITORY: ${{ inputs.container_repository }}
+        RANCHER_URL: ${{ inputs.rancher_url }}
+        RANCHER_TOKEN: ${{ inputs.rancher_token }}
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        NAMESPACE: ${{ inputs.k8s_namespace }}
+        REGISTRY: ${{ inputs.nexus_registry }}
+        REPOSITORY: ${{ inputs.nexus_repository }}
         IMAGE_TAG: ${{ inputs.service_name }}-${{ github.sha }}
+        SERVICE_NAME: ${{ inputs.service_name }}
+        APP_PORT: ${{ inputs.app_port }}
+        SECRET_NAME: ${{ inputs.service_name }}-nexus-pull-secret
       run: |
         export KUBECONFIG=$HOME/.kube/config
-        if [ "${{ steps.check-deployment.outputs.exists }}" == "false" ]; then
-          kubectl create deployment ${{ inputs.service_name }} \
-            --image=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
-            -n ${{ inputs.k8s_namespace }} \
-            --dry-run=client -o yaml > deployment.yaml
-          if command -v yq &> /dev/null; then
-            yq eval '.spec.template.spec.imagePullSecrets = [{"name": "${{ inputs.service_name }}"}]' deployment.yaml > modified.yaml
+        RANCHER_AVAILABLE="${{ steps.rancher-check.outputs.rancher_available }}"
+        DEPLOYMENT_EXISTS="${{ steps.check-deployment.outputs.exists }}"
+        FULL_IMAGE="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+
+        echo "=== Deployment Configuration ==="
+        echo "Image: ${FULL_IMAGE}"
+        echo "Namespace: ${NAMESPACE}"
+        echo "Service: ${SERVICE_NAME}"
+        echo "Port: ${APP_PORT}"
+        echo "Deployment exists: ${DEPLOYMENT_EXISTS}"
+        echo "Rancher available: ${RANCHER_AVAILABLE}"
+        echo "================================="
+
+        if [ "${DEPLOYMENT_EXISTS}" == "false" ]; then
+          echo "--- Creating NEW deployment + service ---"
+
+          if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+            echo "Creating deployment via Rancher API..."
+
+            DEPLOY_PAYLOAD="{
+              \"apiVersion\": \"apps/v1\",
+              \"kind\": \"Deployment\",
+              \"metadata\": {
+                \"name\": \"${SERVICE_NAME}\",
+                \"namespace\": \"${NAMESPACE}\",
+                \"labels\": {
+                  \"app\": \"${SERVICE_NAME}\"
+                }
+              },
+              \"spec\": {
+                \"replicas\": 1,
+                \"selector\": {
+                  \"matchLabels\": {
+                    \"app\": \"${SERVICE_NAME}\"
+                  }
+                },
+                \"template\": {
+                  \"metadata\": {
+                    \"labels\": {
+                      \"app\": \"${SERVICE_NAME}\"
+                    }
+                  },
+                  \"spec\": {
+                    \"imagePullSecrets\": [
+                      {\"name\": \"${SECRET_NAME}\"}
+                    ],
+                    \"containers\": [
+                      {
+                        \"name\": \"${SERVICE_NAME}\",
+                        \"image\": \"${FULL_IMAGE}\",
+                        \"ports\": [
+                          {\"containerPort\": ${APP_PORT}}
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }"
+
+            DEP_RESULT=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "${DEPLOY_PAYLOAD}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/apis/apps/v1/namespaces/${NAMESPACE}/deployments")
+
+            DEP_HTTP=$(echo "$DEP_RESULT" | tail -1)
+            DEP_BODY=$(echo "$DEP_RESULT" | sed '$d')
+
+            if [ "${DEP_HTTP}" -ge 200 ] && [ "${DEP_HTTP}" -lt 300 ]; then
+              echo "Deployment created successfully via Rancher API"
+            else
+              echo "WARNING: Rancher deployment creation failed (HTTP ${DEP_HTTP}): ${DEP_BODY}"
+              echo "Falling back to kubectl..."
+              kubectl create deployment "${SERVICE_NAME}" \
+                --image="${FULL_IMAGE}" \
+                -n "${NAMESPACE}" \
+                --dry-run=client -o yaml > /tmp/deployment.yaml
+              # Inject imagePullSecrets before the containers line
+              sed -i '/^      containers:$/i\      imagePullSecrets:\n      - name: '"${SECRET_NAME}"'' /tmp/deployment.yaml
+              cat /tmp/deployment.yaml
+              kubectl apply -f /tmp/deployment.yaml
+            fi
+
+            # Create ClusterIP Service
+            echo "Creating ClusterIP service via Rancher API..."
+            SVC_PAYLOAD="{
+              \"apiVersion\": \"v1\",
+              \"kind\": \"Service\",
+              \"metadata\": {
+                \"name\": \"${SERVICE_NAME}\",
+                \"namespace\": \"${NAMESPACE}\"
+              },
+              \"spec\": {
+                \"type\": \"ClusterIP\",
+                \"selector\": {
+                  \"app\": \"${SERVICE_NAME}\"
+                },
+                \"ports\": [
+                  {
+                    \"port\": ${APP_PORT},
+                    \"targetPort\": ${APP_PORT},
+                    \"protocol\": \"TCP\"
+                  }
+                ]
+              }
+            }"
+
+            SVC_RESULT=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "${SVC_PAYLOAD}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/api/v1/namespaces/${NAMESPACE}/services")
+
+            if [ "${SVC_RESULT}" -ge 200 ] && [ "${SVC_RESULT}" -lt 300 ]; then
+              echo "Service created successfully via Rancher API"
+            else
+              echo "WARNING: Service creation via Rancher failed (HTTP ${SVC_RESULT}). Falling back to kubectl..."
+              kubectl expose deployment "${SERVICE_NAME}" \
+                --port="${APP_PORT}" \
+                --type=ClusterIP \
+                -n "${NAMESPACE}"
+            fi
+
           else
-            # Fallback using awk to add imagePullSecrets at the correct location
-            awk '
-            /^[[:space:]]*spec:[[:space:]]*$/ && in_template {
-              print $0
-              print "      imagePullSecrets:"
-              print "      - name: ${{ inputs.service_name }}"
-              next
-            }
-            /^[[:space:]]*template:[[:space:]]*$/ { in_template = 1 }
-            /^[[:space:]]*containers:[[:space:]]*$/ && in_template { in_template = 0 }
-            { print }
-            ' deployment.yaml > modified.yaml
+            # Full kubectl fallback for new deployment
+            echo "Creating deployment via kubectl..."
+            kubectl create deployment "${SERVICE_NAME}" \
+              --image="${FULL_IMAGE}" \
+              -n "${NAMESPACE}" \
+              --dry-run=client -o yaml > /tmp/deployment.yaml
+            # Inject imagePullSecrets before the containers line
+            sed -i '/^      containers:$/i\      imagePullSecrets:\n      - name: '"${SECRET_NAME}"'' /tmp/deployment.yaml
+            cat /tmp/deployment.yaml
+            kubectl apply -f /tmp/deployment.yaml
+
+            echo "Creating service via kubectl..."
+            kubectl expose deployment "${SERVICE_NAME}" \
+              --port="${APP_PORT}" \
+              --type=ClusterIP \
+              -n "${NAMESPACE}"
           fi
-          cat modified.yaml 
-          kubectl apply -f modified.yaml          
-          kubectl expose deployment ${{ inputs.service_name }} \
-            --port=${{ inputs.app_port }} -n ${{ inputs.k8s_namespace }}  
+
         else
-          echo "Updating deployment"
-          kubectl set image deployment/${{ inputs.service_name }} \
-            ${{ inputs.service_name }}=$REGISTRY/$REPOSITORY:$IMAGE_TAG \
-            -n ${{ inputs.k8s_namespace }}
+          echo "--- Updating EXISTING deployment image ---"
+
+          if [ "${RANCHER_AVAILABLE}" == "true" ]; then
+            echo "Updating deployment image via Rancher API (strategic merge patch)..."
+
+            PATCH_PAYLOAD="{
+              \"spec\": {
+                \"template\": {
+                  \"spec\": {
+                    \"containers\": [
+                      {
+                        \"name\": \"${SERVICE_NAME}\",
+                        \"image\": \"${FULL_IMAGE}\"
+                      }
+                    ]
+                  }
+                }
+              }
+            }"
+
+            PATCH_RESULT=$(curl -s -w "\n%{http_code}" \
+              -X PATCH \
+              -H "Authorization: Bearer ${RANCHER_TOKEN}" \
+              -H "Content-Type: application/strategic-merge-patch+json" \
+              -d "${PATCH_PAYLOAD}" \
+              "https://${RANCHER_URL}/k8s/clusters/${CLUSTER_ID}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/${SERVICE_NAME}")
+
+            PATCH_HTTP=$(echo "$PATCH_RESULT" | tail -1)
+            PATCH_BODY=$(echo "$PATCH_RESULT" | sed '$d')
+
+            if [ "${PATCH_HTTP}" -ge 200 ] && [ "${PATCH_HTTP}" -lt 300 ]; then
+              echo "Deployment image updated successfully via Rancher API"
+            else
+              echo "WARNING: Rancher patch failed (HTTP ${PATCH_HTTP}): ${PATCH_BODY}"
+              echo "Falling back to kubectl..."
+              kubectl set image "deployment/${SERVICE_NAME}" \
+                "${SERVICE_NAME}=${FULL_IMAGE}" \
+                -n "${NAMESPACE}"
+            fi
+          else
+            echo "Updating deployment image via kubectl..."
+            kubectl set image "deployment/${SERVICE_NAME}" \
+              "${SERVICE_NAME}=${FULL_IMAGE}" \
+              -n "${NAMESPACE}"
+          fi
         fi
 
     - name: Verify deployment
-      shell: bash  
+      shell: bash
       env:
         KUBECONFIG: $HOME/.kube/config
       run: |
         export KUBECONFIG=$HOME/.kube/config
-        kubectl rollout status deployment/${{ inputs.service_name }} -n ${{ inputs.k8s_namespace }}
+        echo "Waiting for deployment rollout to complete..."
+        kubectl rollout status deployment/${{ inputs.service_name }} \
+          -n ${{ inputs.k8s_namespace }} \
+          --timeout=300s
+        echo "Deployment verified successfully"
