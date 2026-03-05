@@ -20,8 +20,8 @@ inputs:
     required: true
     default: "MyService"
   kubeconfig:
-    description: "Cluster Kubeconfig (used for kubectl fallback and deployment verification)"
-    required: true
+    description: "Cluster Kubeconfig (optional — if not provided, uses in-cluster config for kubectl)"
+    required: false
     default: ""
   dockerfile_path:
     description: "Path to Dockerfile"
@@ -116,23 +116,22 @@ runs:
           echo "kubectl already installed: $(kubectl version --client 2>/dev/null)"
         fi
 
-        # Validate kubeconfig content
-        if [ -z "$KUBECONFIG_CONTENT" ]; then
-          echo "Error: KUBECONFIG_CONTENT is empty. Please check the kubeconfig input."
-          exit 1
+        if [ -n "$KUBECONFIG_CONTENT" ]; then
+          # Kubeconfig provided — write it
+          echo "Kubeconfig provided, writing to ~/.kube/config..."
+          mkdir -p $HOME/.kube
+          echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          export KUBECONFIG=$HOME/.kube/config
+          kubectl cluster-info || {
+            echo "WARNING: Failed to connect with provided kubeconfig."
+          }
+        elif [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+          # In-cluster mode (ARC runner pod)
+          echo "No kubeconfig provided. Detected in-cluster service account — using in-cluster config."
+        else
+          echo "WARNING: No kubeconfig provided and not running in-cluster. kubectl fallback will not work."
         fi
-
-        # Write kubeconfig securely
-        mkdir -p $HOME/.kube
-        echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
-        chmod 600 $HOME/.kube/config
-        export KUBECONFIG=$HOME/.kube/config
-
-        # Verify connectivity (warning only — Rancher API is the primary path)
-        kubectl cluster-info || {
-          echo "WARNING: Failed to connect to cluster with provided kubeconfig."
-          echo "kubectl fallback path may not work, but Rancher API may still be available."
-        }
 
     - name: Check Rancher API connectivity
       id: rancher-check
